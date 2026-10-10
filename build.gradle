@@ -1,17 +1,10 @@
 buildscript {
     repositories {
         mavenCentral()
-        maven { url = "https://oss.sonatype.org/content/repositories/snapshots/" }
-        maven { url = "https://plugins.gradle.org/m2/" }
+        gradlePluginPortal()
     }
-	dependencies {
-        classpath 'com.github.jengelman.gradle.plugins:shadow:6.1.0'
-        classpath 'org.ajoberstar:grgit:1.7.0'
-    }
-    configurations.all {
-        resolutionStrategy {
-            force 'org.ow2.asm:asm:6.0_BETA'
-        }
+    dependencies {
+        classpath 'com.gradleup.shadow:shadow-gradle-plugin:9.6.1'
     }
 }
 
@@ -24,24 +17,32 @@ clean { delete "target" }
 
 group = 'com.boydti.fawe'
 
+def git(String... args) {
+    def proc = (["git"] + args.toList()).execute(null, rootDir)
+    def out = proc.text
+    if (proc.waitFor() != 0) throw new GradleException("git ${args.join(' ')} failed")
+    return out
+}
+
 def revision = ""
 def buildNumber = ""
 def semver = ""
 def date = ""
 ext {
     try {
-        git = org.ajoberstar.grgit.Grgit.open(file(".git"))
-        date = git.head().date.format("yy.MM.dd")
-        revision = "-${git.head().abbreviatedId}"
-        parents = git.head().parentIds;
-        index = -67;  // Offset to match CI
-        int major, minor, patch;
-        major = minor = patch = 0;
-        for (; parents != null && !parents.isEmpty(); index++) {
-            int majorCount, minorCount, patchCount;
+        date = git("show", "-s", "--format=%cd", "--date=format:%y.%m.%d", "HEAD").trim()
+        revision = "-" + git("rev-parse", "--short=7", "HEAD").trim()
+        // Full messages of every first-parent ancestor of HEAD, newest first
+        def messages = []
+        if (git("rev-list", "--parents", "-n", "1", "HEAD").trim().split(" ").length > 1) {
+            messages = git("log", "--first-parent", "--format=%x1e%B", "HEAD~1").split("\u001e").drop(1)
+        }
+        int index = -67;  // Offset to match CI
+        int major = 0, minor = 0, patch = 0;
+        for (String message : messages) {
+            int majorCount = 0, minorCount = 0, patchCount = 0;
             patchCount = minor == 0 && major == 0 ? 1 : 0;
-            commit = git.getResolve().toCommit(parents.get(0));
-            for (String line : commit.fullMessage.tokenize("\n")) {
+            for (String line : message.tokenize("\n")) {
                 switch (line.replaceAll("- ", "").split(" ")[0].toLowerCase()) {
                     case "minor":
                     case "added":
@@ -64,7 +65,7 @@ ext {
             major += majorCount;
             minor += minorCount;
             patch += patchCount;
-            parents = commit.getParentIds()
+            index++
         }
         buildNumber = "-${index}"
         semver = "-${major}.${minor}.${patch}"
@@ -81,14 +82,12 @@ description = """FastAsyncWorldEdit"""
 
 subprojects {
 
-    apply plugin: 'java'
+    apply plugin: 'java-library'
     apply plugin: 'eclipse'
     apply plugin: 'idea'
 
-    sourceCompatibility = 1.8
-    targetCompatibility = 1.8
-
     compileJava {
+        options.release = 25
         options.compilerArgs += ["-parameters", "-Xprefer:source"]
     }
 
@@ -112,7 +111,7 @@ subprojects {
     }
 }
 task aggregatedJavadocs(type: Javadoc, description: 'Generate javadocs from all child projects as if it was a single project', group: 'Documentation') {
-    destinationDir = file("./docs/javadoc")
+    destinationDirectory = file("./docs/javadoc")
     title = "$project.name $version API"
     options.author true
     options.links 'https://docs.spring.io/spring/docs/4.3.x/javadoc-api/', 'https://docs.oracle.com/javase/8/docs/api/', 'https://docs.spring.io/spring-ws/docs/2.3.0.RELEASE/api/', 'https://docs.spring.io/spring-security/site/docs/4.0.4.RELEASE/apidocs/'

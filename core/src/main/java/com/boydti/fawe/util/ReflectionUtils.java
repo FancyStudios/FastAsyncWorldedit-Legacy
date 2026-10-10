@@ -1,9 +1,7 @@
 package com.boydti.fawe.util;
 
-import sun.reflect.FieldAccessor;
-import sun.reflect.ReflectionFactory;
+import sun.misc.Unsafe;
 
-import java.lang.invoke.MethodHandles;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
@@ -19,161 +17,109 @@ import java.util.*;
  */
 @SuppressWarnings({"UnusedDeclaration", "rawtypes"})
 public class ReflectionUtils {
+    private static final Unsafe UNSAFE;
+
+    static {
+        try {
+            Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+            theUnsafe.setAccessible(true);
+            UNSAFE = (Unsafe) theUnsafe.get(null);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     public static <T> T as(Class<T> t, Object o) {
         return t.isInstance(o) ? t.cast(o) : null;
     }
 
     @SuppressWarnings("unchecked")
     public static <T extends Enum<?>> T addEnum(Class<T> enumType, String enumName) {
+        Field valuesField = getValuesField(enumType);
         try {
-            return addEnum(enumType, enumName, new Class<?>[]{}, new Object[]{});
-        } catch (Throwable ignored) {
-            return ReflectionUtils9.addEnum(enumType, enumName);
-        }
-    }
+            // 1. Copy the previous enum instances
+            T[] previousValues = (T[]) valuesField.get(null);
+            List<T> values = new ArrayList<>(Arrays.asList(previousValues));
 
+            // 2. Build the new enum constant without running a constructor
+            T newValue = (T) UNSAFE.allocateInstance(enumType);
+            setFailsafeFieldValue(Enum.class.getDeclaredField("name"), newValue, enumName);
+            setFailsafeFieldValue(Enum.class.getDeclaredField("ordinal"), newValue, values.size());
 
-    public static <T extends Enum<?>> T addEnum(Class<T> enumType, String enumName, Class<?>[] additionalTypes, Object[] additionalValues) {
-        // 0. Sanity checks
-        if (!Enum.class.isAssignableFrom(enumType)) {
-            throw new RuntimeException("class " + enumType + " is not an instance of Enum");
-        }
-        // 1. Lookup "$VALUES" holder in enum class and get previous enum instances
-        Field valuesField = null;
-        Field[] fields = enumType.getDeclaredFields();
-        for (Field field : fields) {
-            if (field.getName().contains("$VALUES")) {
-                valuesField = field;
-                break;
-            }
-        }
-        AccessibleObject.setAccessible(new Field[]{valuesField}, true);
-
-        try {
-            // 2. Copy it
-            T[] previousValues = (T[]) valuesField.get(enumType);
-            List values = new ArrayList(Arrays.asList(previousValues));
-
-            // 3. build new enum
-            T newValue = (T) makeEnum(enumType, // The target enum class
-                    enumName, // THE NEW ENUM INSTANCE TO BE DYNAMICALLY ADDED
-                    values.size(),
-                    additionalTypes, // can be used to pass values to the enum constuctor
-                    additionalValues); // can be used to pass values to the enum constuctor
-
-            // 4. add new value
+            // 3. Add it and replace $VALUES
             values.add(newValue);
+            setFailsafeFieldValue(valuesField, null, values.toArray((T[]) Array.newInstance(enumType, 0)));
 
-            // 5. Set new values field
-            setFailsafeFieldValue(valuesField, null,
-                    values.toArray((T[]) Array.newInstance(enumType, 0)));
-
-            // 6. Clean enum cache
+            // 4. Clean the enum caches held by java.lang.Class
             cleanEnumCache(enumType);
             return newValue;
         } catch (Exception e) {
             e.printStackTrace();
             throw new RuntimeException(e.getMessage(), e);
-        } catch (Throwable throwable) {
-            if (additionalTypes.length == 0 && additionalValues.length == 0) {
-                return ReflectionUtils9.addEnum(enumType, enumName);
-            }
-            throw new RuntimeException(throwable.getMessage(), throwable);
         }
     }
 
     public static <T extends Enum<?>> void clearEnum(Class<T> enumType) {
-        // 0. Sanity checks
-        if (!Enum.class.isAssignableFrom(enumType)) {
-            throw new RuntimeException("class " + enumType + " is not an instance of Enum");
-        }
-        // 1. Lookup "$VALUES" holder in enum class and get previous enum instances
-        Field valuesField = null;
-        Field[] fields = enumType.getDeclaredFields();
-        for (Field field : fields) {
-            if (field.getName().contains("$VALUES")) {
-                valuesField = field;
-                break;
-            }
-        }
-        AccessibleObject.setAccessible(new Field[]{valuesField}, true);
+        Field valuesField = getValuesField(enumType);
         try {
             setFailsafeFieldValue(valuesField, null, Array.newInstance(enumType, 0));
-            // 6. Clean enum cache
             cleanEnumCache(enumType);
         } catch (Exception e) {
             e.printStackTrace();
             throw new RuntimeException(e.getMessage(), e);
-        } catch (Throwable throwable) {
-            ReflectionUtils9.clearEnum(enumType);
         }
     }
 
-    private static Object makeEnum(Class<?> enumClass, String value, int ordinal,
-                                   Class<?>[] additionalTypes, Object[] additionalValues) throws Exception {
-        Object[] parms = new Object[additionalValues.length + 2];
-        parms[0] = value;
-        parms[1] = ordinal;
-        System.arraycopy(additionalValues, 0, parms, 2, additionalValues.length);
-        return getConstructorAccessor(enumClass, additionalTypes).newInstance(parms);
+    private static Field getValuesField(Class<?> enumType) {
+        if (!Enum.class.isAssignableFrom(enumType)) {
+            throw new RuntimeException("class " + enumType + " is not an instance of Enum");
+        }
+        for (Field field : enumType.getDeclaredFields()) {
+            if (field.getName().contains("$VALUES")) {
+                field.setAccessible(true);
+                return field;
+            }
+        }
+        throw new RuntimeException("class " + enumType + " has no $VALUES field");
     }
 
-    private static sun.reflect.ConstructorAccessor getConstructorAccessor(Class<?> enumClass,
-                                                                         Class<?>[] additionalParameterTypes) throws NoSuchMethodException {
-        Class<?>[] parameterTypes = new Class[additionalParameterTypes.length + 2];
-        parameterTypes[0] = String.class;
-        parameterTypes[1] = int.class;
-        System.arraycopy(additionalParameterTypes, 0,
-                parameterTypes, 2, additionalParameterTypes.length);
-        return ReflectionFactory.getReflectionFactory().newConstructorAccessor(enumClass.getDeclaredConstructor(parameterTypes));
-    }
-
+    /**
+     * Sets a field even if it is final or inaccessible (e.g. a field of a java.base class).
+     * Final fields and fields that cannot be made accessible are written through Unsafe.
+     */
     public static void setFailsafeFieldValue(Field field, Object target, Object value)
             throws NoSuchFieldException, IllegalAccessException {
-
-        // let's make the field accessible
-        field.setAccessible(true);
-
-        // next we change the modifier in the Field instance to
-        // not be final anymore, thus tricking reflection into
-        // letting us modify the static final field
-        if (Modifier.isFinal(field.getModifiers())) {
+        boolean isStatic = Modifier.isStatic(field.getModifiers());
+        if (!Modifier.isFinal(field.getModifiers())) {
             try {
-                Field lookupField = MethodHandles.Lookup.class.getDeclaredField("IMPL_LOOKUP");
-                lookupField.setAccessible(true);
-
-                // blank out the final bit in the modifiers int
-                ((MethodHandles.Lookup) lookupField.get(null))
-                        .findSetter(Field.class, "modifiers", int.class)
-                        .invokeExact(field, field.getModifiers() & ~Modifier.FINAL);
-            } catch (Throwable e) {
-                e.printStackTrace();
+                field.setAccessible(true);
+                field.set(isStatic ? null : target, value);
+                return;
+            } catch (RuntimeException ignore) {
+                // InaccessibleObjectException: module not opened to us, fall through to Unsafe
             }
         }
-
-        try {
-            FieldAccessor fa = ReflectionFactory.getReflectionFactory().newFieldAccessor(field, false);
-            fa.set(target, value);
-        } catch (NoSuchMethodError error) {
-            field.set(target, value);
+        Class<?> type = field.getType();
+        if (type.isPrimitive() ? value == null : value != null && !type.isInstance(value)) {
+            throw new IllegalArgumentException("Cannot set " + field + " to " + value);
         }
-    }
-
-    private static void blankField(Class<?> enumClass, String fieldName)
-            throws NoSuchFieldException, IllegalAccessException {
-        for (Field field : Class.class.getDeclaredFields()) {
-            if (field.getName().contains(fieldName)) {
-                AccessibleObject.setAccessible(new Field[]{field}, true);
-                setFailsafeFieldValue(field, enumClass, null);
-                break;
-            }
-        }
+        Object base = isStatic ? UNSAFE.staticFieldBase(field) : Objects.requireNonNull(target, "target");
+        long offset = isStatic ? UNSAFE.staticFieldOffset(field) : UNSAFE.objectFieldOffset(field);
+        if (!type.isPrimitive()) UNSAFE.putObjectVolatile(base, offset, value);
+        else if (type == int.class) UNSAFE.putIntVolatile(base, offset, ((Number) value).intValue());
+        else if (type == long.class) UNSAFE.putLongVolatile(base, offset, ((Number) value).longValue());
+        else if (type == boolean.class) UNSAFE.putBooleanVolatile(base, offset, (Boolean) value);
+        else if (type == byte.class) UNSAFE.putByteVolatile(base, offset, ((Number) value).byteValue());
+        else if (type == short.class) UNSAFE.putShortVolatile(base, offset, ((Number) value).shortValue());
+        else if (type == char.class) UNSAFE.putCharVolatile(base, offset, (Character) value);
+        else if (type == float.class) UNSAFE.putFloatVolatile(base, offset, ((Number) value).floatValue());
+        else if (type == double.class) UNSAFE.putDoubleVolatile(base, offset, ((Number) value).doubleValue());
     }
 
     private static void cleanEnumCache(Class<?> enumClass)
             throws NoSuchFieldException, IllegalAccessException {
-        blankField(enumClass, "enumConstantDirectory"); // Sun (Oracle?!?) JDK 1.5/6
-        blankField(enumClass, "enumConstants"); // IBM JDK
+        setFailsafeFieldValue(Class.class.getDeclaredField("enumConstantDirectory"), enumClass, null);
+        setFailsafeFieldValue(Class.class.getDeclaredField("enumConstants"), enumClass, null);
     }
 
     private static Class<?> UNMODIFIABLE_MAP = Collections.unmodifiableMap(Collections.EMPTY_MAP).getClass();
@@ -183,8 +129,7 @@ public class ReflectionUtils {
             Class<? extends Map> clazz = map.getClass();
             if (clazz != UNMODIFIABLE_MAP) return map;
             Field m = clazz.getDeclaredField("m");
-            m.setAccessible(true);
-            return (Map<T, V>) m.get(map);
+            return (Map<T, V>) UNSAFE.getObject(map, UNSAFE.objectFieldOffset(m));
         } catch (Throwable e) {
             MainUtil.handleError(e);
             return map;
@@ -196,8 +141,7 @@ public class ReflectionUtils {
             Class<? extends List> clazz = (Class<? extends List>) Class.forName("java.util.Collections$UnmodifiableList");
             if (!clazz.isInstance(list)) return list;
             Field m = clazz.getDeclaredField("list");
-            m.setAccessible(true);
-            return (List<T>) m.get(list);
+            return (List<T>) UNSAFE.getObject(list, UNSAFE.objectFieldOffset(m));
         } catch (Throwable e) {
             MainUtil.handleError(e);
             return list;

@@ -292,6 +292,11 @@ public class SetQueue {
             parallelThreads = 0;
         }
         try {
+            // An INACTIVE queue is still being filled, so next() holds back the chunk edited last.
+            // A flush comes once the edit is done: run it as no longer INACTIVE, or that chunk
+            // (the last one of a paste) stays in the queue and is thrown away by dequeue below.
+            inactiveQueues.remove(queue);
+            queue.setStage(QueueStage.NONE);
             queue.startSet(Settings.IMP.QUEUE.PARALLEL_THREADS > 1);
             queue.next(Settings.IMP.QUEUE.PARALLEL_THREADS, Long.MAX_VALUE);
         } catch (Throwable e) {

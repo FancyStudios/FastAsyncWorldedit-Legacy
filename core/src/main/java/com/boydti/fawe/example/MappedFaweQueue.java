@@ -10,6 +10,7 @@ import com.boydti.fawe.object.IntegerPair;
 import com.boydti.fawe.object.RunnableVal;
 import com.boydti.fawe.object.RunnableVal2;
 import com.boydti.fawe.object.exception.FaweException;
+import com.boydti.fawe.object.exception.TaskTimeoutException;
 import com.boydti.fawe.object.extent.LightingExtent;
 import com.boydti.fawe.util.MainUtil;
 import com.boydti.fawe.util.MathMan;
@@ -415,7 +416,11 @@ public abstract class MappedFaweQueue<WORLD, CHUNK, CHUNKSECTIONS, SECTION> impl
             cachedLoadChunk = null;
             loadChunk.value.x = cx;
             loadChunk.value.z = cz;
-            TaskManager.IMP.sync(loadChunk, getSettings().HISTORY.CHUNK_WAIT_MS);
+            try {
+                TaskManager.IMP.sync(loadChunk, getSettings().HISTORY.CHUNK_WAIT_MS);
+            } catch (TaskTimeoutException e) {
+                return null;
+            }
             return cachedLoadChunk;
         } else {
             return null;

@@ -6,6 +6,7 @@ import com.boydti.fawe.example.CharFaweChunk;
 import com.boydti.fawe.object.FaweChunk;
 import com.boydti.fawe.object.RegionWrapper;
 import com.boydti.fawe.object.RunnableVal;
+import com.boydti.fawe.object.exception.TaskTimeoutException;
 import com.boydti.fawe.util.MainUtil;
 import com.boydti.fawe.util.MathMan;
 import com.boydti.fawe.util.ReflectionUtils;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.concurrent.TimeUnit;
 import net.minecraft.server.v1_8_R3.Block;
 import net.minecraft.server.v1_8_R3.BlockPosition;
 import net.minecraft.server.v1_8_R3.Chunk;
@@ -751,6 +753,8 @@ public class BukkitQueue18R3 extends BukkitQueue_0<net.minecraft.server.v1_8_R3.
 
     private WorldServer nmsWorld;
     private static final Map<WorldServer, LightEngine> LIGHT_ENGINES = new WeakHashMap<WorldServer, LightEngine>();
+    // Main-thread time spent loading relight neighbour chunks per tick
+    private static final long RELIGHT_LOAD_BUDGET_NANOS = TimeUnit.MILLISECONDS.toNanos(20);
     private volatile LightEngine lightEngine;
 
     @Override
@@ -778,21 +782,36 @@ public class BukkitQueue18R3 extends BukkitQueue_0<net.minecraft.server.v1_8_R3.
             return true;
         }
 
-        Boolean loaded = TaskManager.IMP.sync(new RunnableVal<Boolean>() {
-            @Override
-            public void run(Boolean value) {
-                for (Long pair : required) {
-                    int x = MathMan.unpairIntX(pair);
-                    int z = MathMan.unpairIntY(pair);
-                    if (getCachedChunk(getWorld(), x, z) == null && loadChunk(getWorld(), x, z, true) == null) {
-                        this.value = false;
-                        return;
+        // Load in short main-thread batches so a large relight neither stalls a tick
+        // nor exceeds the chunk wait timeout in a single task
+        final Iterator<Long> remaining = required.iterator();
+        while (remaining.hasNext()) {
+            Boolean loaded;
+            try {
+                loaded = TaskManager.IMP.sync(new RunnableVal<Boolean>() {
+                    @Override
+                    public void run(Boolean value) {
+                        long deadline = System.nanoTime() + RELIGHT_LOAD_BUDGET_NANOS;
+                        while (remaining.hasNext() && System.nanoTime() < deadline) {
+                            long pair = remaining.next();
+                            int x = MathMan.unpairIntX(pair);
+                            int z = MathMan.unpairIntY(pair);
+                            if (getCachedChunk(getWorld(), x, z) == null && loadChunk(getWorld(), x, z, true) == null) {
+                                this.value = false;
+                                return;
+                            }
+                        }
+                        this.value = true;
                     }
-                }
-                this.value = true;
+                }, getSettings().HISTORY.CHUNK_WAIT_MS);
+            } catch (TaskTimeoutException e) {
+                return false;
             }
-        }, getSettings().HISTORY.CHUNK_WAIT_MS);
-        return Boolean.TRUE.equals(loaded);
+            if (!Boolean.TRUE.equals(loaded)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override

@@ -1,6 +1,7 @@
 package com.boydti.fawe.bukkit.util;
 
 import com.boydti.fawe.Fawe;
+import com.boydti.fawe.object.exception.TaskTimeoutException;
 import com.boydti.fawe.util.TaskManager;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -105,7 +106,7 @@ public class BukkitTaskMan extends TaskManager {
             throw new RuntimeException(e);
         } catch (TimeoutException e) {
             future.cancel(false);
-            throw new RuntimeException("Timed out waiting for a main-thread task", e);
+            throw new TaskTimeoutException("Timed out waiting for a main-thread task", e);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof RuntimeException) {

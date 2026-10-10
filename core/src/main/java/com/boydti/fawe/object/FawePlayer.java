@@ -16,6 +16,7 @@ import com.boydti.fawe.util.*;
 import com.boydti.fawe.wrappers.FakePlayer;
 import com.boydti.fawe.wrappers.LocationMaskedPlayerWrapper;
 import com.boydti.fawe.wrappers.PlayerWrapper;
+import com.boydti.fawe.wrappers.WorldWrapper;
 import com.sk89q.minecraft.util.commands.CommandContext;
 import com.sk89q.worldedit.*;
 import com.sk89q.worldedit.Vector;
@@ -398,7 +399,12 @@ public abstract class FawePlayer<T> extends Metadatable {
      * @return
      */
     public World getWorld() {
-        return FaweAPI.getWorld(getLocation().world);
+        World world = FaweAPI.getWorld(getLocation().world);
+        if (world == null) {
+            // Worlds not registered with the platform (e.g. NPC/bot worlds) aren't found by name
+            world = WorldWrapper.wrap(getPlayer().getWorld());
+        }
+        return world;
     }
 
     public FaweQueue getFaweQueue(boolean autoQueue) {

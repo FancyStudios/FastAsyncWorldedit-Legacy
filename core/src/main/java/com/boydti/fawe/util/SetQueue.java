@@ -291,6 +291,11 @@ public class SetQueue {
         } else {
             parallelThreads = 0;
         }
+        // An inactive queue holds back the chunk its edit last wrote, which may still be filling.
+        // A flushed edit is finished, and the queue is dequeued below, so a chunk held back here
+        // would never be placed.
+        inactiveQueues.remove(queue);
+        queue.setStage(QueueStage.ACTIVE);
         try {
             queue.startSet(Settings.IMP.QUEUE.PARALLEL_THREADS > 1);
             queue.next(Settings.IMP.QUEUE.PARALLEL_THREADS, Long.MAX_VALUE);

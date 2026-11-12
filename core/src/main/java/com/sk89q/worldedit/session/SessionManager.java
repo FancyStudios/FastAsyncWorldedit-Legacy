@@ -194,7 +194,9 @@ public class SessionManager {
         // is no limit. There is also a default limit
         int currentChangeLimit = session.getBlockChangeLimit();
 
-        if (!owner.hasPermission("worldedit.limit.unrestricted") && config.maxChangeLimit > -1) {
+        // The config first: with no maximum set there is nothing to bound, and this runs for every click and arm
+        // swing of every player, so the permission lookup was most of what a click cost here
+        if (config.maxChangeLimit > -1 && !owner.hasPermission("worldedit.limit.unrestricted")) {
             // If the default limit is infinite but there is a maximum
             // limit, make sure to not have it be overridden
             if (config.defaultChangeLimit < 0) {

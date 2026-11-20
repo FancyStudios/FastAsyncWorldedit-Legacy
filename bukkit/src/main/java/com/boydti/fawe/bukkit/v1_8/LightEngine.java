@@ -526,6 +526,7 @@ final class LightEngine {
                                 continue;
                             }
                             section = sections[y >> 4] = new ChunkSection(y >> 4 << 4, true);
+                            fillSkyAboveHeightMap(chunk, section, localX, localZ);
                         }
                         int localIndex = ((y & 15) << 8) | (localZ << 4) | localX;
                         byte[] light = section.getSkyLightArray().a();
@@ -539,6 +540,25 @@ final class LightEngine {
             for (ChunkSection section : sections) {
                 if (section != null) {
                     section.b(section.getSkyLightArray());
+                }
+            }
+        }
+
+        // The columns written before the given one skipped their sky above the height map in this section while it
+        // was missing. The volume holds 15 there, and below the height map it holds nothing in this section, or the
+        // section would have been created for one of those columns.
+        private void fillSkyAboveHeightMap(Chunk chunk, ChunkSection section, int untilX, int untilZ) {
+            int sectionY = section.getYPosition();
+            byte[] light = section.getSkyLightArray().a();
+
+            for (int localX = 0; localX <= untilX; ++localX) {
+                int columns = localX == untilX ? untilZ : 16;
+                for (int localZ = 0; localZ < columns; ++localZ) {
+                    int skyStart = chunk.heightMap[(localZ << 4) | localX];
+                    for (int localY = Math.max(0, skyStart - sectionY); localY < 16; ++localY) {
+                        int localIndex = (localY << 8) | (localZ << 4) | localX;
+                        light[localIndex >> 1] |= (byte) (15 << ((localIndex & 1) << 2));
+                    }
                 }
             }
         }
